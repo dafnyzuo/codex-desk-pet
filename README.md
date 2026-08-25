@@ -7,7 +7,8 @@
 ## 功能
 
 - 透明悬浮、始终置顶，可拖到任意位置
-- 紧凑模式约 `284×382`，提问时临时展开，发送后自动收起
+- 紧凑模式约 `284×344`，角色本体约 226 像素宽；提问时临时展开，发送后自动收起
+- 回复气泡加宽、加高，长回答可滚动查看并停留更久
 - 待机呼吸和点击反馈动画
 - 点击 `✦` 直接提问，显示真实的连接、处理和完成状态
 - 支持把图片、文档或文件夹拖到桌宠上交给 Codex 阅读
@@ -66,8 +67,8 @@ npm run dist:mac
 仓库已包含 `.github/workflows/release.yml`。推送版本标签后，GitHub Actions 会自动构建四个 macOS 文件并创建 Release：
 
 ```bash
-git tag v1.1.0
-git push origin v1.1.0
+git tag v1.1.1
+git push origin v1.1.1
 ```
 
 代码使用 MIT License。角色图片的授权范围不同，详见 [ASSET_LICENSE.md](ASSET_LICENSE.md)。

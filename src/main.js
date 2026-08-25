@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { CodexBridge } = require('./codex-bridge');
 
-const WINDOW_SIZE = { width: 284, height: 382 };
+const WINDOW_SIZE = { width: 284, height: 344 };
 const EXPANDED_SIZE = { width: 350, height: 500 };
 const STATE_FILENAME = 'window-state.json';
 

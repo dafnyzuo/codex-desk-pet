@@ -96,7 +96,7 @@ function handleStatus(status = {}) {
     showBubble('Codex 正在思考…', 0);
   } else if (state === 'completed') {
     setBusy(false);
-    showBubble(status.answer || status.message || 'Codex 已完成', 9000);
+    showBubble(status.answer || status.message || 'Codex 已完成', 12000);
   } else if (state === 'error' || state === 'fallback' || state === 'offline') {
     setBusy(false);
     showBubble(status.message || '暂时无法连接 Codex', 5000);
