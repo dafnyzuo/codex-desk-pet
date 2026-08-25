@@ -13,16 +13,38 @@
   <body>
     <main class="stage" id="stage" aria-label="Codex 桌宠">
       <section class="bubble is-visible" id="bubble" aria-live="polite" data-interactive>
-        <span class="status-dot" aria-hidden="true"></span>
-        <span id="bubble-text">单击互动，双击打开 Codex</span>
+        <span class="status-dot" id="status-dot" aria-hidden="true"></span>
+        <span id="bubble-text">点 ✦ 可直接问 Codex</span>
       </section>
 
       <nav class="controls" aria-label="桌宠控制" data-interactive>
+        <button id="ask-button" type="button" title="问问 Codex" aria-label="问问 Codex">✦</button>
         <button id="open-button" type="button" title="打开 Codex" aria-label="打开 Codex">⌘</button>
         <button id="hide-button" type="button" title="隐藏桌宠" aria-label="隐藏桌宠">×</button>
       </nav>
 
-      <div class="character-wrap" id="character" data-interactive role="button" tabindex="0" aria-label="双击打开 Codex，可拖动">
+      <form class="ask-panel" id="ask-panel" data-interactive aria-label="向 Codex 提问">
+        <div class="ask-heading">
+          <span class="ask-title">问问 Codex</span>
+          <span class="connection-state" id="connection-state">正在连接…</span>
+        </div>
+        <div class="attachment" id="attachment" hidden>
+          <span id="attachment-name"></span>
+          <button id="remove-attachment" type="button" aria-label="移除附件">×</button>
+        </div>
+        <textarea id="prompt-input" maxlength="8000" rows="3" placeholder="例如：帮我总结这个文件"></textarea>
+        <div class="ask-actions">
+          <span class="drop-hint">也可把文件拖到桌宠上</span>
+          <button id="close-ask" class="secondary" type="button">收起</button>
+          <button id="send-ask" class="primary" type="submit">发送</button>
+        </div>
+      </form>
+
+      <div class="drop-overlay" id="drop-overlay" aria-hidden="true">
+        <span>放下文件，交给 Codex</span>
+      </div>
+
+      <div class="character-wrap" id="character" data-interactive role="button" tabindex="0" aria-label="单击互动，双击打开 Codex，可拖动文件到这里">
         <div class="spark spark-one" aria-hidden="true">✦</div>
         <div class="spark spark-two" aria-hidden="true">·</div>
         <img src="../assets/pet.png" alt="戴眼镜、穿灰色毛衣的 Codex 桌宠" draggable="false">

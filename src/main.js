@@ -1,17 +1,22 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, screen, shell } = require('electron');
+const { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, Notification, screen, shell, Tray } = require('electron');
 const { execFile } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const { CodexBridge } = require('./codex-bridge');
 
-const WINDOW_SIZE = { width: 368, height: 492 };
+const WINDOW_SIZE = { width: 284, height: 382 };
+const EXPANDED_SIZE = { width: 350, height: 500 };
 const STATE_FILENAME = 'window-state.json';
 
 let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 let dragState = null;
+let compactBounds = null;
+let codexBridge = null;
+let codexStatus = { state: 'connecting', message: '正在连接 Codex…' };
 
 function statePath() {
   return path.join(app.getPath('userData'), STATE_FILENAME);
@@ -67,6 +72,42 @@ function sendMessage(message) {
   }
 }
 
+function sendStatus(status) {
+  codexStatus = {
+    ...status,
+    message: truncate(status.message || ''),
+    ...(status.answer ? { answer: truncate(status.answer, 600) } : {})
+  };
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('pet:status', codexStatus);
+  }
+}
+
+function truncate(text, length = 150) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  return normalized.length > length ? `${normalized.slice(0, length - 1)}…` : normalized;
+}
+
+function setPetExpanded(expanded) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (expanded) {
+    if (compactBounds) return;
+    compactBounds = mainWindow.getBounds();
+    mainWindow.setBounds({
+      x: compactBounds.x - (EXPANDED_SIZE.width - compactBounds.width),
+      y: compactBounds.y - (EXPANDED_SIZE.height - compactBounds.height),
+      ...EXPANDED_SIZE
+    }, true);
+    mainWindow.show();
+    return;
+  }
+
+  if (compactBounds) {
+    mainWindow.setBounds(compactBounds, true);
+    compactBounds = null;
+  }
+}
+
 function openCodex() {
   return new Promise((resolve) => {
     execFile('/usr/bin/open', ['-a', 'Codex'], { timeout: 5000 }, async (error) => {
@@ -114,6 +155,7 @@ function contextMenuTemplate() {
   const openAtLogin = app.isPackaged && app.getLoginItemSettings().openAtLogin;
   return [
     { label: mainWindow?.isVisible() ? '隐藏桌宠' : '显示桌宠', click: toggleWindow },
+    { label: '问问 Codex', click: () => mainWindow?.webContents.send('pet:open-ask') },
     { label: '打开 Codex', click: openCodex },
     { label: '回到右下角', click: resetPosition },
     { type: 'separator' },
@@ -182,11 +224,15 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.showInactive();
-    sendMessage('单击互动，双击打开 Codex');
+    sendMessage('点 ✦ 可直接问 Codex');
+    sendStatus(codexStatus);
+    if (process.env.PET_CAPTURE_EXPANDED) {
+      setTimeout(() => mainWindow?.webContents.send('pet:open-ask'), 120);
+    }
   });
 
   mainWindow.on('moved', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!mainWindow || mainWindow.isDestroyed() || compactBounds) return;
     const [x, y] = mainWindow.getPosition();
     writeState({ x, y });
   });
@@ -222,7 +268,26 @@ function createWindow() {
 
 function registerIpc() {
   ipcMain.handle('pet:open-codex', openCodex);
+  ipcMain.handle('pet:get-status', () => codexStatus);
+  ipcMain.handle('pet:ask', async (_event, payload = {}) => {
+    const prompt = String(payload.prompt || '').slice(0, 8000);
+    const paths = Array.isArray(payload.paths) ? payload.paths.slice(0, 5) : [];
+    try {
+      return await codexBridge.ask(prompt, paths);
+    } catch (error) {
+      const fallbackText = [prompt, paths.length ? `\n本地文件：\n${paths.join('\n')}` : ''].join('').trim();
+      if (fallbackText) clipboard.writeText(fallbackText);
+      sendStatus({
+        state: 'fallback',
+        message: `${error.message}；问题已复制，正在打开 Codex`,
+        errorCode: error.code
+      });
+      await openCodex();
+      return { started: false, fallback: true, error: error.message };
+    }
+  });
   ipcMain.on('pet:hide', () => mainWindow?.hide());
+  ipcMain.on('pet:set-expanded', (_event, expanded) => setPetExpanded(Boolean(expanded)));
   ipcMain.on('pet:context-menu', showContextMenu);
   ipcMain.on('pet:set-ignore-mouse', (_event, ignore) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -251,9 +316,24 @@ if (!gotLock) {
   app.on('second-instance', () => mainWindow?.showInactive());
   app.whenReady().then(() => {
     if (process.platform === 'darwin') app.dock.hide();
+    codexBridge = new CodexBridge({ defaultCwd: app.getPath('documents'), version: app.getVersion() });
+    codexStatus = codexBridge.availability();
+    codexBridge.on('status', (status) => {
+      sendStatus({ ...status, message: truncate(status.message || status.answer || '') });
+      if (status.state === 'completed' && Notification.isSupported()) {
+        new Notification({
+          title: 'Codex 已完成',
+          body: truncate(status.answer || status.message || '任务处理完成', 140),
+          silent: false
+        }).show();
+      }
+    });
     registerIpc();
     createWindow();
     if (!process.env.PET_CAPTURE_PATH) createTray();
+    codexBridge.connect().catch((error) => {
+      sendStatus({ state: 'offline', message: error.message, errorCode: error.code });
+    });
   });
 }
 
@@ -263,6 +343,7 @@ app.on('activate', () => {
 
 app.on('before-quit', () => {
   isQuitting = true;
+  codexBridge?.close();
 });
 
 app.on('window-all-closed', () => {
