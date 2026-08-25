@@ -17,7 +17,7 @@
     "verify": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js && node scripts/verify-assets.mjs",
     "capture": "PET_CAPTURE_PATH=docs/app-preview.png electron .",
     "checksums": "node scripts/checksums.mjs",
-    "dist:mac": "electron-builder --mac dmg zip --x64 --arm64",
+    "dist:mac": "electron-builder --mac dmg zip --x64 --arm64 --publish never",
     "dist:dir": "electron-builder --mac dir --arm64"
   },
   "devDependencies": {
