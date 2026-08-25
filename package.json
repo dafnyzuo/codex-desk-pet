@@ -1,0 +1,81 @@
+{
+  "name": "codex-desk-pet",
+  "version": "1.0.0",
+  "description": "A friendly, shareable macOS desktop companion that opens Codex.",
+  "main": "src/main.js",
+  "author": "dafnyzuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dafnyzuo/codex-desk-pet.git"
+  },
+  "homepage": "https://github.com/dafnyzuo/codex-desk-pet",
+  "bugs": "https://github.com/dafnyzuo/codex-desk-pet/issues",
+  "private": false,
+  "scripts": {
+    "start": "electron .",
+    "verify": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js && node scripts/verify-assets.mjs",
+    "capture": "PET_CAPTURE_PATH=docs/app-preview.png electron .",
+    "checksums": "node scripts/checksums.mjs",
+    "dist:mac": "electron-builder --mac dmg zip --x64 --arm64",
+    "dist:dir": "electron-builder --mac dir --arm64"
+  },
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "latest"
+  },
+  "build": {
+    "appId": "com.codexdeskpet.app",
+    "productName": "Codex Desk Pet",
+    "artifactName": "Codex-Desk-Pet-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "assets/pet.png",
+      "build/tray.png",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "dmg": {
+      "title": "Codex Desk Pet ${version}",
+      "backgroundColor": "#E9E6E4",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 150,
+          "y": 185
+        },
+        {
+          "x": 390,
+          "y": 185,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  }
+}
