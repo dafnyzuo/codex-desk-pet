@@ -6,6 +6,7 @@ const bubbleText = document.querySelector('#bubble-text');
 const statusDot = document.querySelector('#status-dot');
 const character = document.querySelector('#character');
 const petImage = document.querySelector('#pet-image');
+const petMotionVideo = document.querySelector('#pet-motion-video');
 const askButton = document.querySelector('#ask-button');
 const openButton = document.querySelector('#open-button');
 const hideButton = document.querySelector('#hide-button');
@@ -50,7 +51,14 @@ const idleMotions = [
   { name: 'is-nodding', asset: '../assets/pet-nod.png', duration: 1500, label: '点点头 ✓', message: '嗯嗯，收到。' },
   { name: 'is-hopping', asset: '../assets/pet-hop.png', duration: 1650, label: '跳一下 ↑', message: '精神满满，开始吧！' },
   { name: 'is-peeking', asset: '../assets/pet-peek.png', duration: 1900, label: '探头看看 👀', message: '我来看看有什么新任务。' },
-  { name: 'is-waving', asset: '../assets/pet-wave.png', duration: 1900, label: '挥挥手 👋', message: '嗨，我一直在这里。' },
+  {
+    name: 'is-waving',
+    asset: '../assets/pet-wave.png',
+    videoAsset: '../assets/pet-wave-loop.webm',
+    duration: 5050,
+    label: '连续挥手 👋',
+    message: '嗨，我一直在这里。'
+  },
   { name: 'is-stretching', asset: '../assets/pet-stretch.png', duration: 2100, label: '伸个懒腰 ↕', message: '伸展一下，继续工作。' },
   { name: 'is-shaking', asset: '../assets/pet-shake.png', duration: 1700, label: '吓一跳 ✦', message: '哎呀！吓我一跳。' }
 ];
@@ -77,6 +85,11 @@ function pickMotion(motions = idleMotions) {
 function clearMotions(motions = transientMotions) {
   motions.forEach((motion) => character.classList.remove(motion));
   motionLabel.textContent = '';
+  petMotionVideo.pause();
+  petMotionVideo.hidden = true;
+  petMotionVideo.removeAttribute('src');
+  petMotionVideo.load();
+  petImage.hidden = false;
   if (petImage.getAttribute('src') !== BASE_PET_ASSET) petImage.src = BASE_PET_ASSET;
 }
 
@@ -87,12 +100,27 @@ function playMotion(motion, duration, { force = false } = {}) {
   clearMotions();
   void character.offsetWidth;
   motionLabel.textContent = config?.label || '';
-  petImage.src = config?.asset || statusMotionAssets[motion] || BASE_PET_ASSET;
+  const fallbackAsset = config?.asset || statusMotionAssets[motion] || BASE_PET_ASSET;
+  const videoAsset = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    ? null
+    : config?.videoAsset;
+  if (videoAsset) {
+    petImage.hidden = true;
+    petMotionVideo.src = videoAsset;
+    petMotionVideo.hidden = false;
+    petMotionVideo.currentTime = 0;
+    petMotionVideo.play().catch(() => {
+      petMotionVideo.hidden = true;
+      petMotionVideo.removeAttribute('src');
+      petImage.hidden = false;
+      petImage.src = fallbackAsset;
+    });
+  } else {
+    petImage.src = fallbackAsset;
+  }
   character.classList.add(motion);
   motionTimer = window.setTimeout(() => {
-    character.classList.remove(motion);
-    motionLabel.textContent = '';
-    petImage.src = BASE_PET_ASSET;
+    clearMotions([motion]);
   }, duration);
 }
 
@@ -119,6 +147,18 @@ function noteInteraction() {
     showBubble('醒啦，继续一起做点什么？', 2200);
   }
   scheduleIdleMotion();
+}
+
+function handleWake({ shortcut = '⌘⇧Space' } = {}) {
+  noteInteraction();
+  if (!busy) {
+    window.clearTimeout(reactionTimer);
+    character.classList.remove('is-reacting');
+    void character.offsetWidth;
+    character.classList.add('is-reacting');
+    reactionTimer = window.setTimeout(() => character.classList.remove('is-reacting'), 650);
+  }
+  showBubble(`我在。${shortcut} 可以随时叫我。`, 2600);
 }
 
 function applyPetSize(size) {
@@ -403,6 +443,7 @@ window.deskPet.onMessage((message) => showBubble(message));
 window.deskPet.onStatus(handleStatus);
 window.deskPet.onSize(applyPetSize);
 window.deskPet.onOpenAsk(() => setPanel(true));
+window.deskPet.onWake(handleWake);
 window.deskPet.onPlayMotion(previewMotion);
 window.deskPet.onSnapState(handleSnapState);
 window.deskPet.getStatus().then(handleStatus);

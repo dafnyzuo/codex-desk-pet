@@ -32,3 +32,16 @@ for (const assetName of assetNames) {
 
   console.log(`Verified ${assetName}: ${width}x${height}, PNG color type ${colorType}`);
 }
+
+const motionAssetName = 'pet-wave-loop.webm';
+const motionAsset = await readFile(new URL(`../assets/${motionAssetName}`, import.meta.url));
+
+if (motionAsset.subarray(0, 4).toString('hex') !== '1a45dfa3') {
+  throw new Error(`assets/${motionAssetName} is not a valid WebM file`);
+}
+
+if (motionAsset.length < 10_000) {
+  throw new Error(`Desktop-pet motion asset ${motionAssetName} is unexpectedly small: ${motionAsset.length} bytes`);
+}
+
+console.log(`Verified ${motionAssetName}: ${(motionAsset.length / 1024).toFixed(1)} KiB, WebM container`);

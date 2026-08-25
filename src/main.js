@@ -1,6 +1,18 @@
 'use strict';
 
-const { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, Notification, screen, shell, Tray } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  clipboard,
+  globalShortcut,
+  ipcMain,
+  Menu,
+  nativeImage,
+  Notification,
+  screen,
+  shell,
+  Tray
+} = require('electron');
 const { execFile, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -18,6 +30,8 @@ const MENU_BAR_SAFE_INSET = 34;
 const DOCK_SAFE_INSET_MIN = 58;
 const DOCK_SAFE_INSET_MAX = 112;
 const STATE_FILENAME = 'window-state.json';
+const GLOBAL_WAKE_SHORTCUT = 'CommandOrControl+Shift+Space';
+const GLOBAL_WAKE_SHORTCUT_LABEL = '⌘⇧Space';
 const MOTION_PREVIEWS = Object.freeze([
   { label: '眨眼', name: 'is-blinking' },
   { label: '点头', name: 'is-nodding' },
@@ -286,6 +300,27 @@ function toggleWindow() {
   }
 }
 
+function wakePet() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.showInactive();
+  if (mainWindow.webContents.isLoadingMainFrame()) {
+    mainWindow.webContents.once('did-finish-load', () => {
+      mainWindow?.webContents.send('pet:wake', { shortcut: GLOBAL_WAKE_SHORTCUT_LABEL });
+    });
+    return;
+  }
+  mainWindow.webContents.send('pet:wake', { shortcut: GLOBAL_WAKE_SHORTCUT_LABEL });
+}
+
+function registerGlobalShortcuts() {
+  const registered = globalShortcut.register(GLOBAL_WAKE_SHORTCUT, wakePet);
+  if (!registered) {
+    console.warn(`Could not register global shortcut: ${GLOBAL_WAKE_SHORTCUT}`);
+  } else {
+    console.info(`Registered global shortcut: ${GLOBAL_WAKE_SHORTCUT}`);
+  }
+}
+
 function setLaunchAtLogin(enabled) {
   if (!app.isPackaged) return;
   app.setLoginItemSettings({ openAtLogin: enabled, openAsHidden: false });
@@ -294,6 +329,7 @@ function setLaunchAtLogin(enabled) {
 function contextMenuTemplate() {
   const openAtLogin = app.isPackaged && app.getLoginItemSettings().openAtLogin;
   return [
+    { label: '唤醒桌宠', accelerator: GLOBAL_WAKE_SHORTCUT, click: wakePet },
     { label: mainWindow?.isVisible() ? '隐藏桌宠' : '显示桌宠', click: toggleWindow },
     { label: '问问 Codex', click: () => mainWindow?.webContents.send('pet:open-ask') },
     { label: '打开 Codex', click: openCodex },
@@ -341,7 +377,7 @@ function createTray() {
   const iconPath = path.join(__dirname, '..', 'build', 'tray.png');
   const trayImage = nativeImage.createFromPath(iconPath).resize({ width: 18, height: 18 });
   tray = new Tray(trayImage);
-  tray.setToolTip('Codex Desk Pet');
+  tray.setToolTip(`Codex Desk Pet · ${GLOBAL_WAKE_SHORTCUT_LABEL} 唤醒`);
   tray.setContextMenu(Menu.buildFromTemplate(contextMenuTemplate()));
   tray.on('click', toggleWindow);
   tray.on('right-click', () => tray.setContextMenu(Menu.buildFromTemplate(contextMenuTemplate())));
@@ -487,7 +523,7 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => mainWindow?.showInactive());
+  app.on('second-instance', wakePet);
   app.whenReady().then(() => {
     if (process.platform === 'darwin') app.dock.hide();
     refreshDockPreferences();
@@ -512,6 +548,7 @@ if (!gotLock) {
     });
     registerIpc();
     createWindow();
+    registerGlobalShortcuts();
     if (!process.env.PET_CAPTURE_PATH) createTray();
     codexBridge.connect().catch((error) => {
       sendStatus({ state: 'offline', message: error.message, errorCode: error.code });
@@ -520,11 +557,12 @@ if (!gotLock) {
 }
 
 app.on('activate', () => {
-  if (mainWindow) mainWindow.showInactive();
+  wakePet();
 });
 
 app.on('before-quit', () => {
   isQuitting = true;
+  globalShortcut.unregisterAll();
   codexBridge?.close();
 });
 

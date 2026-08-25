@@ -43,7 +43,8 @@ do {
 }
 
 let scaledMask = CIImage(cvPixelBuffer: maskBuffer)
-  // Soften the one-pixel instance-mask edge without changing the subject.
+  // Pull the mask slightly inward to remove green-screen spill, then soften the edge.
+  .applyingFilter("CIMorphologyMinimum", parameters: [kCIInputRadiusKey: 5.0])
   .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 0.45])
   .cropped(to: sourceImage.extent)
 
