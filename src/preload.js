@@ -25,5 +25,11 @@ contextBridge.exposeInMainWorld('deskPet', {
   },
   onOpenAsk: (callback) => {
     ipcRenderer.on('pet:open-ask', () => callback());
+  },
+  onPlayMotion: (callback) => {
+    ipcRenderer.on('pet:play-motion', (_event, motion) => callback(motion));
+  },
+  onSnapState: (callback) => {
+    ipcRenderer.on('pet:snap-state', (_event, state) => callback(state));
   }
 });

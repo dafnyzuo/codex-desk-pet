@@ -1,7 +1,7 @@
 'use strict';
 
 const { app, BrowserWindow, clipboard, ipcMain, Menu, nativeImage, Notification, screen, shell, Tray } = require('electron');
-const { execFile } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { CodexBridge } = require('./codex-bridge');
@@ -13,8 +13,20 @@ const PET_SIZES = Object.freeze({
 });
 const DEFAULT_PET_SIZE = 'small';
 const EXPANDED_SIZE = { width: 350, height: 500 };
-const EDGE_SNAP_DISTANCE = 64;
+const EDGE_SNAP_DISTANCE = 104;
+const MENU_BAR_SAFE_INSET = 34;
+const DOCK_SAFE_INSET_MIN = 58;
+const DOCK_SAFE_INSET_MAX = 112;
 const STATE_FILENAME = 'window-state.json';
+const MOTION_PREVIEWS = Object.freeze([
+  { label: '眨眼', name: 'is-blinking' },
+  { label: '点头', name: 'is-nodding' },
+  { label: '跳一下', name: 'is-hopping' },
+  { label: '探头看看', name: 'is-peeking' },
+  { label: '挥挥手', name: 'is-waving' },
+  { label: '伸懒腰', name: 'is-stretching' },
+  { label: '吓一跳', name: 'is-shaking' }
+]);
 
 let mainWindow = null;
 let tray = null;
@@ -24,6 +36,7 @@ let compactBounds = null;
 let codexBridge = null;
 let codexStatus = { state: 'connecting', message: '正在连接 Codex…' };
 let petSize = DEFAULT_PET_SIZE;
+let dockPreferences = { orientation: 'bottom', autohide: false, tileSize: 64 };
 
 function petDimensions(size = petSize) {
   const { width, height } = PET_SIZES[size] || PET_SIZES[DEFAULT_PET_SIZE];
@@ -52,8 +65,57 @@ function writeState(patch) {
   }
 }
 
+function readDockPreference(key) {
+  if (process.platform !== 'darwin') return '';
+  try {
+    return execFileSync('/usr/bin/defaults', ['read', 'com.apple.dock', key], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 1000
+    }).trim();
+  } catch {
+    return '';
+  }
+}
+
+function refreshDockPreferences() {
+  const orientation = readDockPreference('orientation');
+  const autohide = readDockPreference('autohide');
+  const tileSize = Number(readDockPreference('tilesize'));
+  dockPreferences = {
+    orientation: ['left', 'right', 'bottom'].includes(orientation) ? orientation : 'bottom',
+    autohide: ['1', 'true', 'YES'].includes(autohide),
+    tileSize: Number.isFinite(tileSize) && tileSize > 0 ? tileSize : 64
+  };
+}
+
+function safeWorkArea(display) {
+  const { bounds, workArea } = display;
+  let left = Math.max(bounds.x, workArea.x);
+  let top = Math.max(bounds.y + MENU_BAR_SAFE_INSET, workArea.y);
+  let right = Math.min(bounds.x + bounds.width, workArea.x + workArea.width);
+  let bottom = Math.min(bounds.y + bounds.height, workArea.y + workArea.height);
+
+  if (process.platform === 'darwin') {
+    const dockInset = Math.max(
+      DOCK_SAFE_INSET_MIN,
+      Math.min(DOCK_SAFE_INSET_MAX, Math.round(dockPreferences.tileSize + 12))
+    );
+    if (dockPreferences.orientation === 'left') left = Math.max(left, bounds.x + dockInset);
+    if (dockPreferences.orientation === 'right') right = Math.min(right, bounds.x + bounds.width - dockInset);
+    if (dockPreferences.orientation === 'bottom') bottom = Math.min(bottom, bounds.y + bounds.height - dockInset);
+  }
+
+  return {
+    x: left,
+    y: top,
+    width: Math.max(1, right - left),
+    height: Math.max(1, bottom - top)
+  };
+}
+
 function defaultPosition() {
-  const { workArea } = screen.getPrimaryDisplay();
+  const workArea = safeWorkArea(screen.getPrimaryDisplay());
   const dimensions = petDimensions();
   return {
     x: Math.round(workArea.x + workArea.width - dimensions.width - 28),
@@ -77,11 +139,13 @@ function savedPosition() {
     y: Number.isFinite(saved.y) ? Math.round(saved.y) : 0,
     ...dimensions
   };
-  return isVisibleOnAnyDisplay(candidate) ? { x: candidate.x, y: candidate.y } : defaultPosition();
+  if (!isVisibleOnAnyDisplay(candidate)) return defaultPosition();
+  const clamped = clampToDisplay(candidate);
+  return { x: clamped.x, y: clamped.y };
 }
 
 function clampToDisplay(bounds) {
-  const { workArea } = screen.getDisplayMatching(bounds);
+  const workArea = safeWorkArea(screen.getDisplayMatching(bounds));
   return {
     ...bounds,
     x: Math.max(workArea.x, Math.min(bounds.x, workArea.x + workArea.width - bounds.width)),
@@ -90,25 +154,28 @@ function clampToDisplay(bounds) {
 }
 
 function snapToDisplayEdge(bounds) {
-  const { workArea } = screen.getDisplayMatching(bounds);
+  const workArea = safeWorkArea(screen.getDisplayMatching(bounds));
   const clamped = clampToDisplay(bounds);
   const edges = [
-    { distance: Math.abs(clamped.x - workArea.x), axis: 'x', value: workArea.x },
+    { edge: 'left', distance: Math.abs(clamped.x - workArea.x), axis: 'x', value: workArea.x },
     {
+      edge: 'right',
       distance: Math.abs(workArea.x + workArea.width - (clamped.x + clamped.width)),
       axis: 'x',
       value: workArea.x + workArea.width - clamped.width
     },
-    { distance: Math.abs(clamped.y - workArea.y), axis: 'y', value: workArea.y },
+    { edge: 'top', distance: Math.abs(clamped.y - workArea.y), axis: 'y', value: workArea.y },
     {
+      edge: 'bottom',
       distance: Math.abs(workArea.y + workArea.height - (clamped.y + clamped.height)),
       axis: 'y',
       value: workArea.y + workArea.height - clamped.height
     }
   ];
   const nearest = edges.sort((a, b) => a.distance - b.distance)[0];
-  if (nearest.distance <= EDGE_SNAP_DISTANCE) clamped[nearest.axis] = nearest.value;
-  return clamped;
+  const edge = nearest.distance <= EDGE_SNAP_DISTANCE ? nearest.edge : null;
+  if (edge) clamped[nearest.axis] = nearest.value;
+  return { bounds: clamped, edge };
 }
 
 function setPetSize(nextSize) {
@@ -240,6 +307,13 @@ function contextMenuTemplate() {
         click: () => setPetSize(value)
       }))
     },
+    {
+      label: '动作预览',
+      submenu: MOTION_PREVIEWS.map(({ label, name }) => ({
+        label,
+        click: () => mainWindow?.webContents.send('pet:play-motion', name)
+      }))
+    },
     { type: 'separator' },
     {
       label: '登录时启动',
@@ -276,6 +350,7 @@ function createTray() {
 function createWindow() {
   const position = savedPosition();
   const capturePath = process.env.PET_CAPTURE_PATH;
+  const captureMotion = process.env.PET_CAPTURE_MOTION;
   const dimensions = petDimensions();
 
   mainWindow = new BrowserWindow({
@@ -335,6 +410,9 @@ function createWindow() {
 
   if (capturePath) {
     mainWindow.webContents.once('did-finish-load', () => {
+      if (captureMotion) {
+        setTimeout(() => mainWindow?.webContents.send('pet:play-motion', captureMotion), 120);
+      }
       setTimeout(async () => {
         try {
           const image = await mainWindow.webContents.capturePage();
@@ -381,19 +459,25 @@ function registerIpc() {
   ipcMain.on('pet:drag-start', (_event, point) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     const [x, y] = mainWindow.getPosition();
-    dragState = { windowX: x, windowY: y, pointerX: point.x, pointerY: point.y };
+    dragState = { windowX: x, windowY: y, pointerX: point.x, pointerY: point.y, snapEdge: null };
   });
   ipcMain.on('pet:drag-move', (_event, point) => {
     if (!dragState || !mainWindow || mainWindow.isDestroyed()) return;
     const x = Math.round(dragState.windowX + point.x - dragState.pointerX);
     const y = Math.round(dragState.windowY + point.y - dragState.pointerY);
-    mainWindow.setPosition(x, y, false);
+    const snapped = snapToDisplayEdge({ ...mainWindow.getBounds(), x, y });
+    mainWindow.setBounds(snapped.bounds, false);
+    if (dragState.snapEdge !== snapped.edge) {
+      dragState.snapEdge = snapped.edge;
+      mainWindow.webContents.send('pet:snap-state', { edge: snapped.edge, final: false });
+    }
   });
   ipcMain.on('pet:drag-end', () => {
     if (mainWindow && !mainWindow.isDestroyed() && dragState) {
       const snapped = snapToDisplayEdge(mainWindow.getBounds());
-      mainWindow.setBounds(snapped, true);
-      writeState({ x: snapped.x, y: snapped.y });
+      mainWindow.setBounds(snapped.bounds, true);
+      mainWindow.webContents.send('pet:snap-state', { edge: snapped.edge, final: true });
+      writeState({ x: snapped.bounds.x, y: snapped.bounds.y });
     }
     dragState = null;
   });
@@ -406,6 +490,7 @@ if (!gotLock) {
   app.on('second-instance', () => mainWindow?.showInactive());
   app.whenReady().then(() => {
     if (process.platform === 'darwin') app.dock.hide();
+    refreshDockPreferences();
     const saved = readState();
     const captureSize = process.env.PET_CAPTURE_SIZE;
     petSize = PET_SIZES[captureSize]

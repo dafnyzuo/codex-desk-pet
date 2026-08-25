@@ -1,6 +1,6 @@
 {
   "name": "codex-desk-pet",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A compact, shareable macOS desktop companion with direct Codex prompts and file drop.",
   "main": "src/main.js",
   "author": "dafnyzuo",
@@ -34,7 +34,7 @@
     },
     "files": [
       "src/**/*",
-      "assets/pet.png",
+      "assets/*.png",
       "build/tray.png",
       "package.json"
     ],

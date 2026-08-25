@@ -44,10 +44,13 @@
         <span>放下文件，交给 Codex</span>
       </div>
 
+      <div class="snap-indicator" id="snap-indicator" aria-hidden="true"></div>
+
       <div class="character-wrap" id="character" data-interactive role="button" tabindex="0" aria-label="单击互动，双击打开 Codex，可拖动文件到这里">
+        <div class="motion-label" id="motion-label" aria-hidden="true"></div>
         <div class="spark spark-one" aria-hidden="true">✦</div>
         <div class="spark spark-two" aria-hidden="true">·</div>
-        <img src="../assets/pet.png" alt="戴眼镜、穿灰色毛衣的 Codex 桌宠" draggable="false">
+        <img id="pet-image" src="../assets/pet.png" alt="戴眼镜、穿灰色毛衣的 Codex 桌宠" draggable="false">
         <div class="ground-shadow" aria-hidden="true"></div>
       </div>
     </main>

@@ -5,6 +5,7 @@ const bubble = document.querySelector('#bubble');
 const bubbleText = document.querySelector('#bubble-text');
 const statusDot = document.querySelector('#status-dot');
 const character = document.querySelector('#character');
+const petImage = document.querySelector('#pet-image');
 const askButton = document.querySelector('#ask-button');
 const openButton = document.querySelector('#open-button');
 const hideButton = document.querySelector('#hide-button');
@@ -17,6 +18,8 @@ const removeAttachment = document.querySelector('#remove-attachment');
 const closeAsk = document.querySelector('#close-ask');
 const sendAsk = document.querySelector('#send-ask');
 const dropOverlay = document.querySelector('#drop-overlay');
+const motionLabel = document.querySelector('#motion-label');
+const snapIndicator = document.querySelector('#snap-indicator');
 
 const messages = [
   '今天想把什么做出来？',
@@ -41,15 +44,21 @@ let motionTimer = null;
 let lastInteractionAt = Date.now();
 let lastIdleMotion = null;
 
+const BASE_PET_ASSET = '../assets/pet.png';
 const idleMotions = [
-  { name: 'is-blinking', duration: 720 },
-  { name: 'is-nodding', duration: 1250 },
-  { name: 'is-hopping', duration: 1350 },
-  { name: 'is-peeking', duration: 1700 },
-  { name: 'is-waving', duration: 1750 },
-  { name: 'is-stretching', duration: 1700 },
-  { name: 'is-looking', duration: 1800 }
+  { name: 'is-blinking', asset: '../assets/pet-blink.png', duration: 1100, label: '眨眨眼 ✦', message: '眨眨眼，我在听。' },
+  { name: 'is-nodding', asset: '../assets/pet-nod.png', duration: 1500, label: '点点头 ✓', message: '嗯嗯，收到。' },
+  { name: 'is-hopping', asset: '../assets/pet-hop.png', duration: 1650, label: '跳一下 ↑', message: '精神满满，开始吧！' },
+  { name: 'is-peeking', asset: '../assets/pet-peek.png', duration: 1900, label: '探头看看 👀', message: '我来看看有什么新任务。' },
+  { name: 'is-waving', asset: '../assets/pet-wave.png', duration: 1900, label: '挥挥手 👋', message: '嗨，我一直在这里。' },
+  { name: 'is-stretching', asset: '../assets/pet-stretch.png', duration: 2100, label: '伸个懒腰 ↕', message: '伸展一下，继续工作。' },
+  { name: 'is-shaking', asset: '../assets/pet-shake.png', duration: 1700, label: '吓一跳 ✦', message: '哎呀！吓我一跳。' }
 ];
+const statusMotionAssets = {
+  'is-dozing': '../assets/pet-blink.png',
+  'is-celebrating': '../assets/pet-hop.png',
+  'is-sad': '../assets/pet-nod.png'
+};
 const transientMotions = [
   ...idleMotions.map(({ name }) => name),
   'is-dozing',
@@ -67,15 +76,24 @@ function pickMotion(motions = idleMotions) {
 
 function clearMotions(motions = transientMotions) {
   motions.forEach((motion) => character.classList.remove(motion));
+  motionLabel.textContent = '';
+  if (petImage.getAttribute('src') !== BASE_PET_ASSET) petImage.src = BASE_PET_ASSET;
 }
 
 function playMotion(motion, duration, { force = false } = {}) {
   if (!force && (panelOpen || drag || busy)) return;
+  const config = idleMotions.find(({ name }) => name === motion);
   window.clearTimeout(motionTimer);
   clearMotions();
   void character.offsetWidth;
+  motionLabel.textContent = config?.label || '';
+  petImage.src = config?.asset || statusMotionAssets[motion] || BASE_PET_ASSET;
   character.classList.add(motion);
-  motionTimer = window.setTimeout(() => character.classList.remove(motion), duration);
+  motionTimer = window.setTimeout(() => {
+    character.classList.remove(motion);
+    motionLabel.textContent = '';
+    petImage.src = BASE_PET_ASSET;
+  }, duration);
 }
 
 function scheduleIdleMotion() {
@@ -198,7 +216,26 @@ function react() {
   void character.offsetWidth;
   character.classList.add('is-reacting');
   reactionTimer = window.setTimeout(() => character.classList.remove('is-reacting'), 650);
-  showBubble(messages[Math.floor(Math.random() * messages.length)]);
+  showBubble(motion.message || messages[Math.floor(Math.random() * messages.length)]);
+}
+
+function previewMotion(name) {
+  const motion = idleMotions.find((candidate) => candidate.name === name);
+  if (!motion) return;
+  noteInteraction();
+  playMotion(motion.name, motion.duration, { force: true });
+  showBubble(motion.message, motion.duration + 650);
+}
+
+function handleSnapState({ edge, final } = {}) {
+  const labels = { left: '左侧', right: '右侧', top: '顶部', bottom: '底部' };
+  stage.dataset.snapEdge = edge || '';
+  snapIndicator.textContent = edge ? `吸附到${labels[edge]}` : '';
+  if (!final) return;
+  if (edge) showBubble(`已吸附到${labels[edge]}，并避开 Dock 与菜单栏。`, 2600);
+  window.setTimeout(() => {
+    if (stage.dataset.snapEdge === edge) stage.dataset.snapEdge = '';
+  }, 900);
 }
 
 async function openCodex() {
@@ -366,6 +403,12 @@ window.deskPet.onMessage((message) => showBubble(message));
 window.deskPet.onStatus(handleStatus);
 window.deskPet.onSize(applyPetSize);
 window.deskPet.onOpenAsk(() => setPanel(true));
+window.deskPet.onPlayMotion(previewMotion);
+window.deskPet.onSnapState(handleSnapState);
 window.deskPet.getStatus().then(handleStatus);
 window.deskPet.getSize().then(applyPetSize);
+[BASE_PET_ASSET, ...idleMotions.map(({ asset }) => asset)].forEach((asset) => {
+  const image = new Image();
+  image.src = asset;
+});
 scheduleIdleMotion();
