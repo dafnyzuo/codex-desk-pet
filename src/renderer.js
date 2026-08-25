@@ -36,6 +36,90 @@ let panelOpen = false;
 let attachedPaths = [];
 let busy = false;
 let dropDepth = 0;
+let idleTimer = null;
+let motionTimer = null;
+let lastInteractionAt = Date.now();
+let lastIdleMotion = null;
+
+const idleMotions = [
+  { name: 'is-blinking', duration: 720 },
+  { name: 'is-nodding', duration: 1250 },
+  { name: 'is-hopping', duration: 1350 },
+  { name: 'is-peeking', duration: 1700 },
+  { name: 'is-waving', duration: 1750 },
+  { name: 'is-stretching', duration: 1700 },
+  { name: 'is-looking', duration: 1800 }
+];
+const transientMotions = [
+  ...idleMotions.map(({ name }) => name),
+  'is-dozing',
+  'is-celebrating',
+  'is-sad'
+];
+const tapMotionNames = new Set(['is-blinking', 'is-nodding', 'is-hopping', 'is-waving']);
+
+function pickMotion(motions = idleMotions) {
+  const choices = motions.filter(({ name }) => name !== lastIdleMotion);
+  const motion = choices[Math.floor(Math.random() * choices.length)];
+  lastIdleMotion = motion.name;
+  return motion;
+}
+
+function clearMotions(motions = transientMotions) {
+  motions.forEach((motion) => character.classList.remove(motion));
+}
+
+function playMotion(motion, duration, { force = false } = {}) {
+  if (!force && (panelOpen || drag || busy)) return;
+  window.clearTimeout(motionTimer);
+  clearMotions();
+  void character.offsetWidth;
+  character.classList.add(motion);
+  motionTimer = window.setTimeout(() => character.classList.remove(motion), duration);
+}
+
+function scheduleIdleMotion() {
+  window.clearTimeout(idleTimer);
+  idleTimer = window.setTimeout(() => {
+    if (!panelOpen && !drag && !busy) {
+      const inactiveFor = Date.now() - lastInteractionAt;
+      if (inactiveFor >= 45000) {
+        playMotion('is-dozing', 6500);
+      } else {
+        const motion = pickMotion();
+        playMotion(motion.name, motion.duration);
+      }
+    }
+    scheduleIdleMotion();
+  }, 12000 + Math.random() * 8000);
+}
+
+function noteInteraction() {
+  lastInteractionAt = Date.now();
+  if (character.classList.contains('is-dozing')) {
+    clearMotions(['is-dozing']);
+    showBubble('醒啦，继续一起做点什么？', 2200);
+  }
+  scheduleIdleMotion();
+}
+
+function applyPetSize(size) {
+  if (!['mini', 'small', 'standard'].includes(size)) return;
+  document.documentElement.dataset.petSize = size;
+}
+
+function setStatusMotion(state) {
+  character.classList.remove('is-thinking');
+  clearMotions();
+
+  if (state === 'working') {
+    character.classList.add('is-thinking');
+  } else if (state === 'completed') {
+    playMotion('is-celebrating', 1800, { force: true });
+  } else if (state === 'error' || state === 'offline') {
+    playMotion('is-sad', 2200, { force: true });
+  }
+}
 
 function showBubble(message, duration = 2600) {
   window.clearTimeout(bubbleTimer);
@@ -47,6 +131,7 @@ function showBubble(message, duration = 2600) {
 }
 
 function setPanel(open) {
+  noteInteraction();
   panelOpen = open;
   stage.classList.toggle('is-expanded', open);
   askPanel.classList.toggle('is-visible', open);
@@ -79,6 +164,7 @@ function handleStatus(status = {}) {
   stage.dataset.status = state;
   statusDot.dataset.status = state;
   connectionState.dataset.status = state;
+  setStatusMotion(state);
 
   const labels = {
     connecting: '连接中',
@@ -104,6 +190,9 @@ function handleStatus(status = {}) {
 }
 
 function react() {
+  noteInteraction();
+  const motion = pickMotion(idleMotions.filter(({ name }) => tapMotionNames.has(name)));
+  playMotion(motion.name, motion.duration);
   window.clearTimeout(reactionTimer);
   character.classList.remove('is-reacting');
   void character.offsetWidth;
@@ -113,6 +202,7 @@ function react() {
 }
 
 async function openCodex() {
+  noteInteraction();
   character.classList.remove('is-opening');
   void character.offsetWidth;
   character.classList.add('is-opening');
@@ -168,7 +258,7 @@ async function submitQuestion() {
 }
 
 character.addEventListener('pointerdown', (event) => {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || panelOpen) return;
   character.setPointerCapture(event.pointerId);
   drag = {
     pointerId: event.pointerId,
@@ -177,6 +267,10 @@ character.addEventListener('pointerdown', (event) => {
     moved: false
   };
   window.deskPet.dragStart(event.screenX, event.screenY);
+});
+
+character.addEventListener('pointerenter', () => {
+  if (character.classList.contains('is-dozing')) noteInteraction();
 });
 
 character.addEventListener('pointermove', (event) => {
@@ -270,5 +364,8 @@ document.addEventListener('mouseleave', () => {
 
 window.deskPet.onMessage((message) => showBubble(message));
 window.deskPet.onStatus(handleStatus);
+window.deskPet.onSize(applyPetSize);
 window.deskPet.onOpenAsk(() => setPanel(true));
 window.deskPet.getStatus().then(handleStatus);
+window.deskPet.getSize().then(applyPetSize);
+scheduleIdleMotion();

@@ -1,6 +1,6 @@
 {
   "name": "codex-desk-pet",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "A compact, shareable macOS desktop companion with direct Codex prompts and file drop.",
   "main": "src/main.js",
   "author": "dafnyzuo",
@@ -15,8 +15,8 @@
   "scripts": {
     "start": "electron .",
     "verify": "node --check src/main.js && node --check src/codex-bridge.js && node --check src/preload.js && node --check src/renderer.js && node scripts/verify-assets.mjs",
-    "capture": "PET_CAPTURE_PATH=docs/app-preview.png electron .",
-    "capture:expanded": "PET_CAPTURE_PATH=docs/prompt-preview.png PET_CAPTURE_EXPANDED=1 electron .",
+    "capture": "PET_CAPTURE_PATH=docs/app-preview.png PET_CAPTURE_SIZE=small electron .",
+    "capture:expanded": "PET_CAPTURE_PATH=docs/prompt-preview.png PET_CAPTURE_SIZE=small PET_CAPTURE_EXPANDED=1 electron .",
     "checksums": "node scripts/checksums.mjs",
     "dist:mac": "electron-builder --mac dmg zip --x64 --arm64 --publish never",
     "dist:dir": "electron-builder --mac dir --arm64"

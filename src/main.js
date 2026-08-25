@@ -6,8 +6,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { CodexBridge } = require('./codex-bridge');
 
-const WINDOW_SIZE = { width: 284, height: 344 };
+const PET_SIZES = Object.freeze({
+  mini: { label: '迷你', width: 232, height: 284 },
+  small: { label: '小巧', width: 284, height: 344 },
+  standard: { label: '标准', width: 340, height: 412 }
+});
+const DEFAULT_PET_SIZE = 'small';
 const EXPANDED_SIZE = { width: 350, height: 500 };
+const EDGE_SNAP_DISTANCE = 64;
 const STATE_FILENAME = 'window-state.json';
 
 let mainWindow = null;
@@ -17,6 +23,12 @@ let dragState = null;
 let compactBounds = null;
 let codexBridge = null;
 let codexStatus = { state: 'connecting', message: '正在连接 Codex…' };
+let petSize = DEFAULT_PET_SIZE;
+
+function petDimensions(size = petSize) {
+  const { width, height } = PET_SIZES[size] || PET_SIZES[DEFAULT_PET_SIZE];
+  return { width, height };
+}
 
 function statePath() {
   return path.join(app.getPath('userData'), STATE_FILENAME);
@@ -42,9 +54,10 @@ function writeState(patch) {
 
 function defaultPosition() {
   const { workArea } = screen.getPrimaryDisplay();
+  const dimensions = petDimensions();
   return {
-    x: Math.round(workArea.x + workArea.width - WINDOW_SIZE.width - 28),
-    y: Math.round(workArea.y + workArea.height - WINDOW_SIZE.height - 18)
+    x: Math.round(workArea.x + workArea.width - dimensions.width - 28),
+    y: Math.round(workArea.y + workArea.height - dimensions.height - 18)
   };
 }
 
@@ -58,12 +71,72 @@ function isVisibleOnAnyDisplay(bounds) {
 
 function savedPosition() {
   const saved = readState();
+  const dimensions = petDimensions();
   const candidate = {
     x: Number.isFinite(saved.x) ? Math.round(saved.x) : 0,
     y: Number.isFinite(saved.y) ? Math.round(saved.y) : 0,
-    ...WINDOW_SIZE
+    ...dimensions
   };
   return isVisibleOnAnyDisplay(candidate) ? { x: candidate.x, y: candidate.y } : defaultPosition();
+}
+
+function clampToDisplay(bounds) {
+  const { workArea } = screen.getDisplayMatching(bounds);
+  return {
+    ...bounds,
+    x: Math.max(workArea.x, Math.min(bounds.x, workArea.x + workArea.width - bounds.width)),
+    y: Math.max(workArea.y, Math.min(bounds.y, workArea.y + workArea.height - bounds.height))
+  };
+}
+
+function snapToDisplayEdge(bounds) {
+  const { workArea } = screen.getDisplayMatching(bounds);
+  const clamped = clampToDisplay(bounds);
+  const edges = [
+    { distance: Math.abs(clamped.x - workArea.x), axis: 'x', value: workArea.x },
+    {
+      distance: Math.abs(workArea.x + workArea.width - (clamped.x + clamped.width)),
+      axis: 'x',
+      value: workArea.x + workArea.width - clamped.width
+    },
+    { distance: Math.abs(clamped.y - workArea.y), axis: 'y', value: workArea.y },
+    {
+      distance: Math.abs(workArea.y + workArea.height - (clamped.y + clamped.height)),
+      axis: 'y',
+      value: workArea.y + workArea.height - clamped.height
+    }
+  ];
+  const nearest = edges.sort((a, b) => a.distance - b.distance)[0];
+  if (nearest.distance <= EDGE_SNAP_DISTANCE) clamped[nearest.axis] = nearest.value;
+  return clamped;
+}
+
+function setPetSize(nextSize) {
+  if (!PET_SIZES[nextSize] || nextSize === petSize) return;
+  petSize = nextSize;
+  writeState({ petSize });
+
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const dimensions = petDimensions();
+  mainWindow.webContents.send('pet:size', petSize);
+
+  if (compactBounds) {
+    compactBounds = clampToDisplay({
+      x: compactBounds.x + compactBounds.width - dimensions.width,
+      y: compactBounds.y + compactBounds.height - dimensions.height,
+      ...dimensions
+    });
+    return;
+  }
+
+  const bounds = mainWindow.getBounds();
+  const resized = clampToDisplay({
+    x: bounds.x + bounds.width - dimensions.width,
+    y: bounds.y + bounds.height - dimensions.height,
+    ...dimensions
+  });
+  mainWindow.setBounds(resized, true);
+  writeState({ x: resized.x, y: resized.y });
 }
 
 function sendMessage(message) {
@@ -158,6 +231,15 @@ function contextMenuTemplate() {
     { label: '问问 Codex', click: () => mainWindow?.webContents.send('pet:open-ask') },
     { label: '打开 Codex', click: openCodex },
     { label: '回到右下角', click: resetPosition },
+    {
+      label: '桌宠尺寸',
+      submenu: Object.entries(PET_SIZES).map(([value, config]) => ({
+        label: config.label,
+        type: 'radio',
+        checked: petSize === value,
+        click: () => setPetSize(value)
+      }))
+    },
     { type: 'separator' },
     {
       label: '登录时启动',
@@ -194,9 +276,10 @@ function createTray() {
 function createWindow() {
   const position = savedPosition();
   const capturePath = process.env.PET_CAPTURE_PATH;
+  const dimensions = petDimensions();
 
   mainWindow = new BrowserWindow({
-    ...WINDOW_SIZE,
+    ...dimensions,
     ...position,
     transparent: true,
     backgroundColor: '#00000000',
@@ -224,6 +307,7 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.showInactive();
+    mainWindow.webContents.send('pet:size', petSize);
     sendMessage('点 ✦ 可直接问 Codex');
     sendStatus(codexStatus);
     if (process.env.PET_CAPTURE_EXPANDED) {
@@ -269,6 +353,7 @@ function createWindow() {
 function registerIpc() {
   ipcMain.handle('pet:open-codex', openCodex);
   ipcMain.handle('pet:get-status', () => codexStatus);
+  ipcMain.handle('pet:get-size', () => petSize);
   ipcMain.handle('pet:ask', async (_event, payload = {}) => {
     const prompt = String(payload.prompt || '').slice(0, 8000);
     const paths = Array.isArray(payload.paths) ? payload.paths.slice(0, 5) : [];
@@ -305,6 +390,11 @@ function registerIpc() {
     mainWindow.setPosition(x, y, false);
   });
   ipcMain.on('pet:drag-end', () => {
+    if (mainWindow && !mainWindow.isDestroyed() && dragState) {
+      const snapped = snapToDisplayEdge(mainWindow.getBounds());
+      mainWindow.setBounds(snapped, true);
+      writeState({ x: snapped.x, y: snapped.y });
+    }
     dragState = null;
   });
 }
@@ -316,6 +406,13 @@ if (!gotLock) {
   app.on('second-instance', () => mainWindow?.showInactive());
   app.whenReady().then(() => {
     if (process.platform === 'darwin') app.dock.hide();
+    const saved = readState();
+    const captureSize = process.env.PET_CAPTURE_SIZE;
+    petSize = PET_SIZES[captureSize]
+      ? captureSize
+      : PET_SIZES[saved.petSize]
+        ? saved.petSize
+        : DEFAULT_PET_SIZE;
     codexBridge = new CodexBridge({ defaultCwd: app.getPath('documents'), version: app.getVersion() });
     codexStatus = codexBridge.availability();
     codexBridge.on('status', (status) => {
