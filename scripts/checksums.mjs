@@ -1,15 +1,17 @@
 import { createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readdir, writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const releaseDirectory = path.resolve('release');
+const packageJson = JSON.parse(await readFile(path.resolve('package.json'), 'utf8'));
+const versionMarker = `-${packageJson.version}-`;
 const files = (await readdir(releaseDirectory))
-  .filter((name) => name.endsWith('.dmg') || name.endsWith('.zip'))
+  .filter((name) => name.includes(versionMarker) && (name.endsWith('.dmg') || name.endsWith('.zip')))
   .sort();
 
 if (files.length === 0) {
-  throw new Error('No DMG or ZIP files found in release/');
+  throw new Error(`No DMG or ZIP files found for version ${packageJson.version} in release/`);
 }
 
 async function sha256(filePath) {

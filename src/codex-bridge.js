@@ -48,6 +48,21 @@ function preferredWorkingDirectory(filePaths, fallback) {
   }
 }
 
+function formatConversationHistory(history) {
+  if (!Array.isArray(history) || !history.length) return '';
+  const entries = history
+    .slice(-24)
+    .map((message) => {
+      const role = message?.role === 'assistant' ? '助手' : '用户';
+      const text = String(message?.text || '').trim().slice(0, 6000);
+      return text ? `${role}：${text}` : '';
+    })
+    .filter(Boolean);
+  if (!entries.length) return '';
+  const transcript = entries.join('\n\n').slice(-16000);
+  return `以下是这个桌宠会话在上次运行中保存的记录。请延续其中的上下文，不要重复这些内容：\n\n${transcript}\n\n用户的新问题：\n`;
+}
+
 class CodexBridge extends EventEmitter {
   constructor({ defaultCwd, version = '1.0.0' } = {}) {
     super();
@@ -61,8 +76,12 @@ class CodexBridge extends EventEmitter {
     this.connecting = null;
     this.ready = false;
     this.activeThreadId = null;
+    this.threadCwd = null;
+    this.activeConversationId = null;
+    this.conversationSessions = new Map();
     this.activeTurnId = null;
     this.latestAnswer = '';
+    this.streamTimer = null;
   }
 
   availability() {
@@ -72,7 +91,12 @@ class CodexBridge extends EventEmitter {
   }
 
   emitStatus(state, message, detail = {}) {
-    this.emit('status', { state, message, ...detail });
+    this.emit('status', {
+      state,
+      message,
+      ...(this.activeConversationId ? { conversationId: this.activeConversationId } : {}),
+      ...detail
+    });
   }
 
   async connect() {
@@ -184,7 +208,16 @@ class CodexBridge extends EventEmitter {
 
   handleNotification(method, params) {
     if (method === 'turn/started') {
+      this.activeTurnId = params.turn?.id || params.turnId || this.activeTurnId;
       this.emitStatus('working', 'Codex 正在思考…');
+      return;
+    }
+
+    if (method === 'item/agentMessage/delta') {
+      const delta = String(params.delta || '');
+      if (!delta) return;
+      this.latestAnswer += delta;
+      this.emitStreamingStatus();
       return;
     }
 
@@ -195,6 +228,8 @@ class CodexBridge extends EventEmitter {
     }
 
     if (method === 'turn/completed') {
+      clearTimeout(this.streamTimer);
+      this.streamTimer = null;
       const status = params.turn?.status || params.status || 'completed';
       const failed = status === 'failed';
       const interrupted = status === 'interrupted';
@@ -217,52 +252,123 @@ class CodexBridge extends EventEmitter {
     }
   }
 
-  async ask(prompt, inputPaths = []) {
-    const text = String(prompt || '').trim();
-    if (!text) throw asError('请输入要问 Codex 的内容', 'EMPTY_PROMPT');
-    if (this.activeTurnId) throw asError('Codex 正在处理上一项任务', 'CODEX_BUSY');
+  emitStreamingStatus() {
+    if (this.streamTimer) return;
+    this.streamTimer = setTimeout(() => {
+      this.streamTimer = null;
+      this.emitStatus('working', 'Codex 正在回复…', {
+        answer: this.latestAnswer,
+        partial: true
+      });
+    }, 80);
+  }
 
-    const validPaths = inputPaths
-      .slice(0, 5)
-      .map((filePath) => path.resolve(String(filePath)))
-      .filter((filePath) => fs.existsSync(filePath));
-    const cwd = preferredWorkingDirectory(validPaths, this.defaultCwd);
-    await this.connect();
+  async ensureThread(cwd, conversationId) {
+    const resolvedCwd = path.resolve(cwd);
+    const session = this.conversationSessions.get(conversationId);
+    if (session?.threadId && session.cwd === resolvedCwd) {
+      this.activeThreadId = session.threadId;
+      this.threadCwd = session.cwd;
+      return { threadId: session.threadId, reused: true };
+    }
 
     const threadResult = await this.request('thread/start', {
-      cwd,
+      cwd: resolvedCwd,
       approvalPolicy: 'never',
       sandbox: 'read-only',
       ephemeral: true,
       personality: 'friendly',
       serviceName: 'codex-desk-pet',
-      developerInstructions: 'Use the same language as the user. Be concise. This desktop-pet session is strictly read-only: do not modify files or external state.'
+      developerInstructions: 'Use the same language as the user. Be concise and conversational. Remember earlier turns in this desktop-pet conversation. This session is strictly read-only: do not modify files or external state.'
     });
     const threadId = threadResult?.thread?.id || threadResult?.threadId;
     if (!threadId) throw asError('Codex 没有返回任务 ID', 'CODEX_INVALID_RESPONSE');
-
-    const pathContext = validPaths.length
-      ? `\n\n用户拖入的本地路径：\n${validPaths.map((filePath) => `- ${filePath}`).join('\n')}`
-      : '';
-    const input = [{ type: 'text', text: `${text}${pathContext}` }];
-    validPaths.forEach((filePath) => {
-      if (IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
-        input.push({ type: 'localImage', path: filePath });
-      }
-    });
-
     this.activeThreadId = threadId;
-    this.latestAnswer = '';
-    const turnResult = await this.request('turn/start', {
-      threadId,
-      input,
-      cwd,
-      approvalPolicy: 'never',
-      sandboxPolicy: { type: 'readOnly', networkAccess: true }
+    this.threadCwd = resolvedCwd;
+    this.conversationSessions.set(conversationId, { threadId, cwd: resolvedCwd });
+    return { threadId, reused: false };
+  }
+
+  async ask(prompt, inputPaths = [], conversationId = 'default', history = []) {
+    const text = String(prompt || '').trim();
+    if (!text) throw asError('请输入要问 Codex 的内容', 'EMPTY_PROMPT');
+    if (this.activeTurnId) throw asError('Codex 正在处理上一项任务', 'CODEX_BUSY');
+    this.activeTurnId = 'starting';
+    this.activeConversationId = String(conversationId || 'default').slice(0, 120);
+
+    try {
+      const validPaths = inputPaths
+        .slice(0, 5)
+        .map((filePath) => path.resolve(String(filePath)))
+        .filter((filePath) => fs.existsSync(filePath));
+      const cwd = preferredWorkingDirectory(validPaths, this.defaultCwd);
+      await this.connect();
+      const { threadId, reused } = await this.ensureThread(cwd, this.activeConversationId);
+
+      const pathContext = validPaths.length
+        ? `\n\n用户拖入的本地路径：\n${validPaths.map((filePath) => `- ${filePath}`).join('\n')}`
+        : '';
+      const historyContext = reused ? '' : formatConversationHistory(history);
+      const input = [{ type: 'text', text: `${historyContext}${text}${pathContext}` }];
+      validPaths.forEach((filePath) => {
+        if (IMAGE_EXTENSIONS.has(path.extname(filePath).toLowerCase())) {
+          input.push({ type: 'localImage', path: filePath });
+        }
+      });
+
+      this.latestAnswer = '';
+      const turnResult = await this.request('turn/start', {
+        threadId,
+        input,
+        cwd,
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'readOnly', networkAccess: true }
+      });
+      if (this.activeTurnId === 'starting') {
+        this.activeTurnId = turnResult?.turn?.id || turnResult?.turnId || 'active';
+      }
+      this.emitStatus('working', 'Codex 正在思考…', {
+        answer: this.latestAnswer,
+        partial: Boolean(this.latestAnswer)
+      });
+      return {
+        started: true,
+        threadId,
+        reused,
+        conversationId: this.activeConversationId,
+        restoredHistory: Boolean(historyContext),
+        paths: validPaths
+      };
+    } catch (error) {
+      this.activeTurnId = null;
+      throw error;
+    }
+  }
+
+  async stop() {
+    if (!this.activeTurnId || this.activeTurnId === 'starting' || !this.activeThreadId) {
+      return { stopped: false };
+    }
+    await this.request('turn/interrupt', {
+      threadId: this.activeThreadId,
+      turnId: this.activeTurnId
     });
-    this.activeTurnId = turnResult?.turn?.id || turnResult?.turnId || 'active';
-    this.emitStatus('working', 'Codex 正在思考…');
-    return { started: true, threadId, paths: validPaths };
+    this.emitStatus('working', '正在停止 Codex…', { answer: this.latestAnswer, partial: true });
+    return { stopped: true };
+  }
+
+  newConversation(conversationId) {
+    if (this.activeTurnId) throw asError('请先停止当前回复', 'CODEX_BUSY');
+    const id = String(conversationId || '').slice(0, 120);
+    if (id) this.conversationSessions.delete(id);
+    if (!id || this.activeConversationId === id) {
+      this.activeThreadId = null;
+      this.threadCwd = null;
+      this.activeConversationId = null;
+    }
+    this.latestAnswer = '';
+    this.emitStatus('ready', '已开启新对话');
+    return { reset: true };
   }
 
   handleExit(error) {
@@ -272,7 +378,12 @@ class CodexBridge extends EventEmitter {
     }
     this.ready = false;
     this.activeThreadId = null;
+    this.threadCwd = null;
+    this.activeConversationId = null;
+    this.conversationSessions.clear();
     this.activeTurnId = null;
+    clearTimeout(this.streamTimer);
+    this.streamTimer = null;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);
@@ -287,6 +398,13 @@ class CodexBridge extends EventEmitter {
     if (this.process && !this.process.killed) this.process.kill();
     this.process = null;
     this.ready = false;
+    this.activeThreadId = null;
+    this.threadCwd = null;
+    this.activeConversationId = null;
+    this.conversationSessions.clear();
+    this.activeTurnId = null;
+    clearTimeout(this.streamTimer);
+    this.streamTimer = null;
   }
 }
 

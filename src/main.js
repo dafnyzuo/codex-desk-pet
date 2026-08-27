@@ -4,6 +4,7 @@ const {
   app,
   BrowserWindow,
   clipboard,
+  dialog,
   globalShortcut,
   ipcMain,
   Menu,
@@ -24,7 +25,7 @@ const PET_SIZES = Object.freeze({
   standard: { label: '标准', width: 340, height: 412 }
 });
 const DEFAULT_PET_SIZE = 'small';
-const EXPANDED_SIZE = { width: 350, height: 500 };
+const EXPANDED_SIZE = { width: 408, height: 640 };
 const EDGE_SNAP_DISTANCE = 104;
 const MENU_BAR_SAFE_INSET = 34;
 const DOCK_SAFE_INSET_MIN = 58;
@@ -39,7 +40,10 @@ const MOTION_PREVIEWS = Object.freeze([
   { label: '探头看看', name: 'is-peeking' },
   { label: '挥挥手', name: 'is-waving' },
   { label: '伸懒腰', name: 'is-stretching' },
-  { label: '吓一跳', name: 'is-shaking' }
+  { label: '吓一跳', name: 'is-shaking' },
+  { label: '左右跳舞', name: 'is-dancing' },
+  { label: '开心庆祝', name: 'is-cheering' },
+  { label: '送你一颗心', name: 'is-hearting' }
 ]);
 
 let mainWindow = null;
@@ -230,11 +234,16 @@ function sendStatus(status) {
   codexStatus = {
     ...status,
     message: truncate(status.message || ''),
-    ...(status.answer ? { answer: truncate(status.answer, 600) } : {})
+    ...(status.answer ? { answer: preserveAnswer(status.answer, 16000) } : {})
   };
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('pet:status', codexStatus);
   }
+}
+
+function preserveAnswer(text, length = 16000) {
+  const normalized = String(text || '').replace(/\r\n/g, '\n').trim();
+  return normalized.length > length ? `${normalized.slice(0, length - 1)}…` : normalized;
 }
 
 function truncate(text, length = 150) {
@@ -247,11 +256,11 @@ function setPetExpanded(expanded) {
   if (expanded) {
     if (compactBounds) return;
     compactBounds = mainWindow.getBounds();
-    mainWindow.setBounds({
+    mainWindow.setBounds(clampToDisplay({
       x: compactBounds.x - (EXPANDED_SIZE.width - compactBounds.width),
       y: compactBounds.y - (EXPANDED_SIZE.height - compactBounds.height),
       ...EXPANDED_SIZE
-    }, true);
+    }), true);
     mainWindow.show();
     return;
   }
@@ -260,6 +269,85 @@ function setPetExpanded(expanded) {
     mainWindow.setBounds(compactBounds, true);
     compactBounds = null;
   }
+}
+
+function temporaryCapturePath(prefix, extension) {
+  const directory = path.join(app.getPath('temp'), 'codex-desk-pet');
+  fs.mkdirSync(directory, { recursive: true });
+  return path.join(directory, `${prefix}-${Date.now()}.${extension}`);
+}
+
+function isNonEmptyFile(filePath) {
+  try {
+    const stats = fs.statSync(filePath);
+    return stats.isFile() && stats.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+function captureRegion() {
+  if (process.platform !== 'darwin') {
+    return Promise.resolve({ captured: false, error: '区域截图目前仅支持 macOS' });
+  }
+
+  const filePath = temporaryCapturePath('screenshot', 'png');
+  mainWindow?.hide();
+  return new Promise((resolve) => {
+    execFile('/usr/sbin/screencapture', ['-i', '-x', filePath], (error) => {
+      mainWindow?.showInactive();
+      const captured = !error && isNonEmptyFile(filePath);
+      if (captured) {
+        resolve({ captured: true, path: filePath });
+      } else {
+        try {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        } catch {}
+        resolve({ captured: false, cancelled: true });
+      }
+    });
+  });
+}
+
+function captureCurrentScreen() {
+  if (process.platform !== 'darwin') {
+    return Promise.resolve({ captured: false, error: '屏幕截图目前仅支持 macOS' });
+  }
+
+  const filePath = temporaryCapturePath('screen', 'png');
+  const display = mainWindow
+    ? screen.getDisplayMatching(mainWindow.getBounds())
+    : screen.getPrimaryDisplay();
+  const { x, y, width, height } = display.bounds;
+  mainWindow?.hide();
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      execFile('/usr/sbin/screencapture', ['-x', '-R', `${x},${y},${width},${height}`, filePath], (error) => {
+        mainWindow?.showInactive();
+        const captured = !error && isNonEmptyFile(filePath);
+        if (captured) {
+          resolve({ captured: true, path: filePath });
+        } else {
+          try {
+            if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+          } catch {}
+          resolve({ captured: false, error: '没有截取到当前屏幕，请检查屏幕录制权限。' });
+        }
+      });
+    }, 140);
+  });
+}
+
+async function selectFiles() {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择要交给 Codex 的文件',
+    buttonLabel: '选择文件',
+    properties: ['openFile', 'multiSelections']
+  });
+  return {
+    selected: !result.canceled && result.filePaths.length > 0,
+    paths: result.filePaths.slice(0, 5)
+  };
 }
 
 function openCodex() {
@@ -468,18 +556,56 @@ function registerIpc() {
   ipcMain.handle('pet:open-codex', openCodex);
   ipcMain.handle('pet:get-status', () => codexStatus);
   ipcMain.handle('pet:get-size', () => petSize);
+  ipcMain.handle('pet:capture-screen', captureCurrentScreen);
+  ipcMain.handle('pet:capture-region', captureRegion);
+  ipcMain.handle('pet:select-files', selectFiles);
+  ipcMain.handle('pet:copy-text', (_event, text) => {
+    clipboard.writeText(String(text || ''));
+    return { copied: true };
+  });
+  ipcMain.handle('pet:stop', async () => {
+    try {
+      return await codexBridge.stop();
+    } catch (error) {
+      sendStatus({ state: 'error', message: error.message, errorCode: error.code });
+      return { stopped: false, error: error.message };
+    }
+  });
+  ipcMain.handle('pet:new-conversation', (_event, conversationId) => {
+    try {
+      return codexBridge.newConversation(conversationId);
+    } catch (error) {
+      return { reset: false, error: error.message };
+    }
+  });
   ipcMain.handle('pet:ask', async (_event, payload = {}) => {
     const prompt = String(payload.prompt || '').slice(0, 8000);
     const paths = Array.isArray(payload.paths) ? payload.paths.slice(0, 5) : [];
+    const conversationId = String(payload.conversationId || 'default').slice(0, 120);
+    const history = Array.isArray(payload.history)
+      ? payload.history.slice(-24).map((message) => ({
+        role: message?.role === 'assistant' ? 'assistant' : 'user',
+        text: String(message?.text || '').slice(0, 6000)
+      }))
+      : [];
     try {
-      return await codexBridge.ask(prompt, paths);
+      return await codexBridge.ask(prompt, paths, conversationId, history);
     } catch (error) {
+      if (['CODEX_BUSY', 'EMPTY_PROMPT'].includes(error.code)) {
+        sendStatus({
+          state: error.code === 'CODEX_BUSY' ? 'working' : 'ready',
+          message: error.message,
+          conversationId
+        });
+        return { started: false, fallback: false, error: error.message };
+      }
       const fallbackText = [prompt, paths.length ? `\n本地文件：\n${paths.join('\n')}` : ''].join('').trim();
       if (fallbackText) clipboard.writeText(fallbackText);
       sendStatus({
         state: 'fallback',
         message: `${error.message}；问题已复制，正在打开 Codex`,
-        errorCode: error.code
+        errorCode: error.code,
+        conversationId
       });
       await openCodex();
       return { started: false, fallback: true, error: error.message };
@@ -537,7 +663,7 @@ if (!gotLock) {
     codexBridge = new CodexBridge({ defaultCwd: app.getPath('documents'), version: app.getVersion() });
     codexStatus = codexBridge.availability();
     codexBridge.on('status', (status) => {
-      sendStatus({ ...status, message: truncate(status.message || status.answer || '') });
+      sendStatus({ ...status, message: status.message || status.answer || '' });
       if (status.state === 'completed' && Notification.isSupported()) {
         new Notification({
           title: 'Codex 已完成',

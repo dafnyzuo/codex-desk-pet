@@ -4,11 +4,23 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('deskPet', {
   openCodex: () => ipcRenderer.invoke('pet:open-codex'),
-  ask: (prompt, paths) => ipcRenderer.invoke('pet:ask', { prompt, paths }),
+  ask: (prompt, paths, conversationId, history) => ipcRenderer.invoke('pet:ask', {
+    prompt,
+    paths,
+    conversationId,
+    history
+  }),
+  stop: () => ipcRenderer.invoke('pet:stop'),
+  newConversation: (conversationId) => ipcRenderer.invoke('pet:new-conversation', conversationId),
+  captureScreen: () => ipcRenderer.invoke('pet:capture-screen'),
+  captureRegion: () => ipcRenderer.invoke('pet:capture-region'),
+  selectFiles: () => ipcRenderer.invoke('pet:select-files'),
+  copyText: (text) => ipcRenderer.invoke('pet:copy-text', text),
   getStatus: () => ipcRenderer.invoke('pet:get-status'),
   getSize: () => ipcRenderer.invoke('pet:get-size'),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   hide: () => ipcRenderer.send('pet:hide'),
+  showContextMenu: () => ipcRenderer.send('pet:context-menu'),
   setExpanded: (expanded) => ipcRenderer.send('pet:set-expanded', Boolean(expanded)),
   setIgnoreMouse: (ignore) => ipcRenderer.send('pet:set-ignore-mouse', Boolean(ignore)),
   dragStart: (x, y) => ipcRenderer.send('pet:drag-start', { x, y }),

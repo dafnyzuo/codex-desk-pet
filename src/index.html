@@ -25,16 +25,38 @@
 
       <form class="ask-panel" id="ask-panel" data-interactive aria-label="向 Codex 提问">
         <div class="ask-heading">
-          <span class="ask-title">问问 Codex</span>
-          <span class="connection-state" id="connection-state">正在连接…</span>
+          <div>
+            <span class="ask-title">问问 Codex</span>
+            <span class="connection-state" id="connection-state">正在连接…</span>
+          </div>
+          <span class="active-conversation-title" id="active-conversation-title">新对话</span>
+        </div>
+        <div class="context-section">
+          <div class="context-tools" aria-label="上下文工具">
+            <button id="capture-screen" type="button" title="截取桌宠所在的屏幕">当前屏幕</button>
+            <button id="capture-region" type="button" title="框选屏幕中的任意区域">框选区域</button>
+            <button id="select-files" type="button" title="选择一个或多个本地文件">选择文件</button>
+            <button id="conversation-switch" type="button" title="切换独立的对话历史" aria-expanded="false">切换对话</button>
+          </div>
+          <section class="conversation-switcher" id="conversation-switcher" aria-label="对话历史" hidden>
+            <div class="switcher-heading">
+              <span>对话历史</span>
+              <button id="create-conversation" type="button">+ 新对话</button>
+            </div>
+            <div class="conversation-list" id="conversation-list"></div>
+          </section>
+        </div>
+        <div class="conversation" id="conversation" aria-live="polite">
+          <div class="conversation-empty" id="conversation-empty">可以连续追问，我会记住这次对话。</div>
         </div>
         <div class="attachment" id="attachment" hidden>
           <span id="attachment-name"></span>
           <button id="remove-attachment" type="button" aria-label="移除附件">×</button>
         </div>
-        <textarea id="prompt-input" maxlength="8000" rows="3" placeholder="例如：帮我总结这个文件"></textarea>
+        <textarea id="prompt-input" maxlength="8000" rows="3" placeholder="输入问题，或先选择屏幕、文件…"></textarea>
         <div class="ask-actions">
-          <span class="drop-hint">也可把文件拖到桌宠上</span>
+          <span class="drop-hint">⌘ Enter 发送</span>
+          <button id="stop-ask" class="danger" type="button" hidden>停止</button>
           <button id="close-ask" class="secondary" type="button">收起</button>
           <button id="send-ask" class="primary" type="submit">发送</button>
         </div>
@@ -50,6 +72,16 @@
         <div class="motion-label" id="motion-label" aria-hidden="true"></div>
         <div class="spark spark-one" aria-hidden="true">✦</div>
         <div class="spark spark-two" aria-hidden="true">·</div>
+        <div class="motion-effects" aria-hidden="true">
+          <span class="fx-note fx-note-one">♪</span>
+          <span class="fx-note fx-note-two">♫</span>
+          <span class="fx-confetti fx-confetti-one">✦</span>
+          <span class="fx-confetti fx-confetti-two">●</span>
+          <span class="fx-confetti fx-confetti-three">◆</span>
+          <span class="fx-heart fx-heart-one">♥</span>
+          <span class="fx-heart fx-heart-two">♥</span>
+          <span class="fx-heart fx-heart-three">♥</span>
+        </div>
         <img id="pet-image" src="../assets/pet.png" alt="戴眼镜、穿灰色毛衣的 Codex 桌宠" draggable="false">
         <video id="pet-motion-video" class="pet-motion-video" muted playsinline aria-hidden="true" hidden></video>
         <div class="ground-shadow" aria-hidden="true"></div>
